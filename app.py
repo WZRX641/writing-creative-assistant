@@ -147,4 +147,5 @@ async def generate(req: GenerateRequest):
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run(app, host="0.0.0.0", port=8765)
+    port = int(os.getenv("PORT", 8765))
+    uvicorn.run(app, host="0.0.0.0", port=port)
