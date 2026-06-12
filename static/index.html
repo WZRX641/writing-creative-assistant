@@ -1,0 +1,925 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>写作创意助手</title>
+<script src="https://d3js.org/d3.v7.min.js"></script>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  background: #0f0f1a; color: #e0e0e0; overflow: hidden; height: 100vh;
+  display: flex; flex-direction: column;
+}
+/* 工具栏 */
+.toolbar {
+  display: flex; align-items: center; gap: 8px;
+  padding: 12px 20px; background: rgba(20,20,40,0.95);
+  border-bottom: 1px solid rgba(255,255,255,0.08); z-index: 10;
+  backdrop-filter: blur(10px); flex-wrap: wrap;
+}
+.toolbar .logo {
+  font-size: 18px; font-weight: 700; letter-spacing: 1px;
+  background: linear-gradient(135deg, #a78bfa, #60a5fa);
+  -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+  margin-right: 4px;
+}
+.toolbar input {
+  flex: 1; max-width: 260px; min-width: 120px;
+  padding: 8px 14px; border: 1px solid rgba(255,255,255,0.15);
+  border-radius: 8px; background: rgba(255,255,255,0.05);
+  color: #e0e0e0; font-size: 14px; outline: none;
+  transition: border-color 0.2s;
+}
+.toolbar input:focus { border-color: #a78bfa; }
+.toolbar input::placeholder { color: rgba(255,255,255,0.3); }
+.toolbar button {
+  padding: 8px 16px; border: none; border-radius: 8px;
+  font-size: 13px; font-weight: 600; cursor: pointer;
+  transition: transform 0.15s, box-shadow 0.15s;
+  white-space: nowrap;
+}
+.toolbar button:hover { transform: translateY(-1px); }
+.toolbar button:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+.btn-primary { background: linear-gradient(135deg, #7c3aed, #4f46e5); color: #fff; }
+.btn-primary:hover { box-shadow: 0 4px 20px rgba(124,58,237,0.4); }
+.btn-outline {
+  background: transparent; color: rgba(255,255,255,0.7);
+  border: 1px solid rgba(255,255,255,0.15);
+}
+.btn-outline:hover { background: rgba(255,255,255,0.08); }
+.toolbar .sep { width: 1px; height: 20px; background: rgba(255,255,255,0.12); margin: 0 4px; }
+.toolbar select {
+  background: rgba(30,30,50,0.9); color: #e0e0f0;
+  border: 1px solid rgba(255,255,255,0.2); border-radius: 6px;
+  padding: 6px 8px; font-size: 13px; cursor: pointer; outline: none;
+}
+.toolbar select option {
+  background: #1a1a2e; color: #e0e0f0;
+}
+.toolbar select:hover { background: rgba(50,50,70,0.95); }
+.toolbar select:focus { border-color: #a78bfa; }
+.toolbar .status { font-size: 12px; color: rgba(255,255,255,0.35); }
+.toolbar .hint { font-size: 12px; color: rgba(255,255,255,0.3); margin-left: auto; }
+
+#canvas { flex: 1; position: relative; cursor: grab; }
+#canvas:active { cursor: grabbing; }
+#canvas svg { width: 100%; height: 100%; }
+
+/* 小地图 */
+#minimap {
+  position: absolute; bottom: 110px; right: 20px;
+  width: 160px; height: 120px;
+  background: rgba(15,15,30,0.85); border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 10px; overflow: hidden; backdrop-filter: blur(6px);
+}
+#minimap svg { width: 100%; height: 100%; }
+#minimap .viewport {
+  fill: none; stroke: rgba(255,255,255,0.4); stroke-width: 1;
+  stroke-dasharray: 4 2;
+}
+
+/* 图例 */
+.legend {
+  position: absolute; bottom: 24px; left: 24px;
+  display: flex; flex-direction: column; gap: 6px;
+  background: rgba(15,15,30,0.85); padding: 12px 16px;
+  border-radius: 10px; border: 1px solid rgba(255,255,255,0.08);
+  backdrop-filter: blur(6px);
+}
+.legend-item { display: flex; align-items: center; gap: 8px; font-size: 12px; color: rgba(255,255,255,0.65); }
+.legend-dot { width: 8px; height: 8px; border-radius: 50%; }
+
+.loading {
+  position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%);
+  display: flex; flex-direction: column; align-items: center; gap: 10px;
+}
+.loading .spinner {
+  width: 32px; height: 32px;
+  border: 3px solid rgba(255,255,255,0.1); border-top-color: #a78bfa;
+  border-radius: 50%; animation: spin 0.8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.loading .text { font-size: 13px; color: rgba(255,255,255,0.45); }
+
+.node-label {
+  font-family: inherit; font-size: 12px; fill: #e0e0e0; text-anchor: middle;
+  pointer-events: none; text-shadow: 0 1px 4px rgba(0,0,0,0.8);
+}
+.node-label.center { font-size: 18px; font-weight: 700; fill: #fff; }
+
+.tooltip {
+  position: absolute; padding: 6px 12px;
+  background: rgba(25,25,50,0.95); border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 6px; font-size: 12px; pointer-events: none; opacity: 0;
+  transition: opacity 0.12s; white-space: nowrap; backdrop-filter: blur(6px);
+  z-index: 100;
+}
+
+/* 快捷键提示面板 */
+#shortcuts-panel {
+  display: none; position: absolute; top: 70px; right: 20px;
+  background: rgba(15,15,30,0.92); border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 10px; padding: 16px 20px; font-size: 12px;
+  backdrop-filter: blur(8px); z-index: 50; line-height: 1.8;
+}
+#shortcuts-panel kbd {
+  display: inline-block; padding: 1px 6px; margin: 0 2px;
+  background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.15);
+  border-radius: 4px; font-family: monospace; font-size: 11px;
+}
+</style>
+</head>
+<body>
+
+<div class="toolbar">
+  <span class="logo">✍️ 写作创意助手</span>
+  <input id="wordInput" type="text" placeholder="输入主题或关键词…" autofocus>
+  <select id="depthSelect" title="发散深度">
+    <option value="1">深度 1</option>
+    <option value="2">深度 2</option>
+    <option value="3">深度 3</option>
+  </select>
+  <button class="btn-primary" id="generateBtn" onclick="doGenerate()">✍️ 激发灵感</button>
+  <span class="sep"></span>
+  <button class="btn-outline" onclick="exportPNG()" title="Ctrl+E">📷 PNG</button>
+  <button class="btn-outline" onclick="exportSVG()">🔲 SVG</button>
+  <button class="btn-outline" onclick="exportJSON()" title="Ctrl+J">📋 JSON</button>
+  <span class="sep"></span>
+  <button class="btn-outline" onclick="toggleShortcuts()" title="?">⌨ 快捷键</button>
+  <span class="status" id="saveStatus"></span>
+  <span class="hint">主题追加 | Ctrl+S 保存 | 0 清空</span>
+</div>
+
+<div id="canvas">
+  <div class="loading" id="loading" style="display:none">
+    <div class="spinner"></div>
+    <div class="text" id="loadingText">正在构思…</div>
+  </div>
+  <div class="tooltip" id="tooltip"></div>
+  <div class="legend">
+    <div class="legend-item"><span class="legend-dot" style="background:#f472b6"></span> 情节构思</div>
+    <div class="legend-item"><span class="legend-dot" style="background:#60a5fa"></span> 人物设定</div>
+    <div class="legend-item"><span class="legend-dot" style="background:#34d399"></span> 场景氛围</div>
+    <div class="legend-item"><span class="legend-dot" style="background:#f59e0b"></span> 主题联想</div>
+  </div>
+  <div id="minimap"><svg></svg></div>
+  <div id="shortcuts-panel">
+    <b>快捷键</b><br>
+    <kbd>Ctrl+S</kbd> 保存 &nbsp; <kbd>Ctrl+E</kbd> 导出PNG<br>
+    <kbd>Ctrl+J</kbd> 导出JSON &nbsp; <kbd>Delete</kbd> 删除节点<br>
+    <kbd>+</kbd> / <kbd>-</kbd> 缩放 &nbsp; <kbd>0</kbd> 清空<br>
+    <kbd>F</kbd> 适配窗口 &nbsp; <kbd>?</kbd> 此面板<br>
+    <kbd>Esc</kbd> 关闭
+  </div>
+</div>
+
+<script>
+const CATEGORY_COLORS = {
+  plot:"#f472b6", character:"#60a5fa",
+  setting:"#34d399", theme:"#f59e0b"
+};
+const CATEGORY_NAMES = {
+  plot:"情节构思", character:"人物设定",
+  setting:"场景氛围", theme:"主题联想"
+};
+const CENTER_COLOR = "#f472b6", CENTER_RADIUS = 28, NODE_RADIUS = 12;
+
+const container = document.getElementById("canvas");
+const w = () => container.clientWidth;
+const h = () => container.clientHeight;
+const svg = d3.select("#canvas").append("svg").attr("width","100%").attr("height","100%");
+const g = svg.append("g");
+const zoom = d3.zoom().scaleExtent([0.15, 5]).on("zoom", e => {
+  g.attr("transform", e.transform);
+  updateMinimap();
+});
+svg.call(zoom);
+
+// ── 状态 ──
+let graph = { nodes:[], edges:[], roots:[] };
+let nodePos = {};
+let nextId = 1;
+let activeSim = null;
+let selectedNode = null;
+let hoveredNode = null;
+const tooltip = d3.select("#tooltip");
+const minimapSvg = d3.select("#minimap svg");
+
+function isCenter(d) { return d && (d.id==="root" || graph.roots.includes(d.label)); }
+function uid() { return "n"+(nextId++); }
+
+// ═══════════════════════════════════════
+// 持久化 (localStorage)
+// ═══════════════════════════════════════
+const STORAGE_KEY = "inspire-mind-graph";
+
+function saveToStorage() {
+  try {
+    const data = { graph, nodePos, nextId };
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+    document.getElementById("saveStatus").textContent = "✓ 已保存";
+    setTimeout(() => { document.getElementById("saveStatus").textContent = ""; }, 1500);
+  } catch(e) {
+    document.getElementById("saveStatus").textContent = "⚠ 保存失败";
+  }
+}
+
+function loadFromStorage() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return null;
+    const data = JSON.parse(raw);
+    graph = data.graph;
+    nodePos = data.nodePos || {};
+    nextId = data.nextId || 1;
+    document.getElementById("saveStatus").textContent = "✓ 已恢复";
+    setTimeout(() => { document.getElementById("saveStatus").textContent = ""; }, 1500);
+    return data;
+  } catch(e) { return null; }
+}
+
+function autoSave() {
+  if (graph.nodes.length > 0) saveToStorage();
+}
+
+// ═══════════════════════════════════════
+// 核心渲染
+function draw() {
+  g.selectAll("*").remove();
+
+  // ── 强制数据清理 ──
+  // 按 label 去重（防止任何路径产生的重复节点）
+  const seen = new Set();
+  graph.nodes = graph.nodes.filter(n => {
+    const key = n.label;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  // 确保根节点 id 统一
+  const root = graph.nodes.find(n => n.id === "root" || graph.roots.includes(n.label));
+  if (root) root.id = "root";
+  // 清理不连通的 edge
+  const nodeLabels = new Set(graph.nodes.map(n => n.label));
+  graph.edges = graph.edges.filter(e => nodeLabels.has(e.source) && nodeLabels.has(e.target));
+
+  const nodes = graph.nodes, edges = graph.edges;
+  nodes.forEach(d => {
+    const pos = nodePos[d.label];
+    d.x = (pos && pos.x != null) ? pos.x : w()/2;
+    d.y = (pos && pos.y != null) ? pos.y : h()/2;
+  });
+
+  const linkSel = g.append("g").selectAll("line")
+    .data(edges).join("line")
+    .attr("stroke", "rgba(255,255,255,0.15)")
+    .attr("stroke-width", 1.5);
+
+  const nodeSel = g.append("g").selectAll("g")
+    .data(nodes).join("g")
+    .style("cursor","pointer")
+    .attr("transform", d => `translate(${d.x},${d.y})`)
+    .call(d3.drag()
+      .on("drag", function(event, d) {
+        const nx = event.x, ny = event.y;
+        d.x = nx; d.y = ny;
+        nodePos[d.label] = { x:nx, y:ny };
+        d3.select(this).attr("transform", `translate(${nx},${ny})`);
+        refreshLinks();
+        updateMinimap();
+      })
+    )
+    .on("click", function(event, d) {
+      event.stopPropagation();
+      if (isCenter(d)) { selectedNode = d; return; }
+      if (d._expanded) { selectedNode = d; return; }
+      selectedNode = d;
+      expandNode(d);
+    });
+
+  // 选中框
+  if (selectedNode && !isCenter(selectedNode)) {
+    const sn = nodeSel.filter(d => d === selectedNode);
+    sn.append("circle")
+      .attr("r", NODE_RADIUS + 8)
+      .attr("fill","none").attr("stroke","#a78bfa")
+      .attr("stroke-width",2).attr("stroke-dasharray","4 2")
+      .attr("opacity",0.8);
+  }
+
+  // 光环
+  nodeSel.append("circle")
+    .attr("r", d => isCenter(d) ? CENTER_RADIUS+8 : NODE_RADIUS+5)
+    .attr("fill","none")
+    .attr("stroke", d => isCenter(d) ? CENTER_COLOR : CATEGORY_COLORS[d.category])
+    .attr("stroke-opacity",0.25).attr("stroke-width",2.5);
+
+  // 主体
+  nodeSel.append("circle")
+    .attr("r", d => isCenter(d) ? CENTER_RADIUS : NODE_RADIUS)
+    .attr("fill", d => isCenter(d) ? CENTER_COLOR : CATEGORY_COLORS[d.category])
+    .attr("opacity",0.9);
+
+  // 标签
+  nodeSel.append("text")
+    .text(d => d.label)
+    .attr("dy", d => isCenter(d) ? 5 : 22)
+    .attr("class", d => isCenter(d) ? "node-label center" : "node-label")
+    .style("font-size", d => isCenter(d) ? "18px" : "12px");
+
+  // +号
+  nodeSel.filter(d => !isCenter(d) && !d._expanded)
+    .append("text").text("+")
+    .attr("dy",-20).attr("class","node-label")
+    .style("font-size","15px").style("font-weight","bold")
+    .style("fill","#a78bfa").style("opacity",0.8);
+
+  // 类别标签
+  nodeSel.filter(d => !isCenter(d))
+    .append("text")
+    .text(d => CATEGORY_NAMES[d.category]||"")
+    .attr("dy",-34).attr("class","node-label")
+    .style("font-size","9px")
+    .style("fill", d => CATEGORY_COLORS[d.category]).style("opacity",0.7);
+
+  // 悬停
+  nodeSel.on("mouseenter", function(event, d) {
+    hoveredNode = d;
+    const del = "<br><span style='color:#ef4444; font-size:10px'>按 Delete 删除</span>";
+    if (isCenter(d)) {
+      tooltip.style("opacity",1).html(`<b>${d.label}</b> ← 根节点${del}`);
+    } else {
+      const extra = d._expanded ? del : `<br><span style='color:#a78bfa'>点击继续发散 →</span>${del}`;
+      tooltip.style("opacity",1).html(`<b>${d.label}</b>${extra}`);
+    }
+  }).on("mousemove", function(event) {
+    tooltip.style("left",(event.offsetX+14)+"px").style("top",(event.offsetY-30)+"px");
+  }).on("mouseleave", function() {
+    tooltip.style("opacity",0);
+    hoveredNode = null;
+  });
+
+  function refreshLinks() {
+    linkSel
+      .attr("x1", d => (nodePos[d.source]||{}).x||0)
+      .attr("y1", d => (nodePos[d.source]||{}).y||0)
+      .attr("x2", d => (nodePos[d.target]||{}).x||0)
+      .attr("y2", d => (nodePos[d.target]||{}).y||0);
+  }
+  refreshLinks();
+  updateMinimap();
+  autoSave();
+}
+
+// ═══════════════════════════════════════
+// 小地图
+// ═══════════════════════════════════════
+function updateMinimap() {
+  const mmW = 160, mmH = 120, pad = 10;
+  minimapSvg.selectAll("*").remove();
+  if (!graph.nodes.length) return;
+
+  const allX = graph.nodes.map(d => nodePos[d.label]?.x || w()/2);
+  const allY = graph.nodes.map(d => nodePos[d.label]?.y || h()/2);
+  const minX = Math.min(...allX), maxX = Math.max(...allX);
+  const minY = Math.min(...allY), maxY = Math.max(...allY);
+  const rangeX = Math.max(maxX - minX, 1), rangeY = Math.max(maxY - minY, 1);
+  const scale = Math.min((mmW - pad*2) / rangeX, (mmH - pad*2) / rangeY);
+  const tx = (x) => pad + (x - minX) * scale;
+  const ty = (y) => pad + (y - minY) * scale;
+
+  // 连线
+  minimapSvg.selectAll("line")
+    .data(graph.edges).join("line")
+    .attr("x1", d => tx(nodePos[d.source]?.x || 0))
+    .attr("y1", d => ty(nodePos[d.source]?.y || 0))
+    .attr("x2", d => tx(nodePos[d.target]?.x || 0))
+    .attr("y2", d => ty(nodePos[d.target]?.y || 0))
+    .attr("stroke", "rgba(255,255,255,0.12)").attr("stroke-width", 0.5);
+
+  // 节点
+  minimapSvg.selectAll("circle")
+    .data(graph.nodes).join("circle")
+    .attr("cx", d => tx(nodePos[d.label]?.x || w()/2))
+    .attr("cy", d => ty(nodePos[d.label]?.y || h()/2))
+    .attr("r", d => isCenter(d) ? 3.5 : 2)
+    .attr("fill", d => isCenter(d) ? CENTER_COLOR : CATEGORY_COLORS[d.category]);
+
+  // 视口框
+  const t = d3.zoomTransform(svg.node());
+  const vx = (-t.x) / t.k, vy = (-t.y) / t.k;
+  const vw = w() / t.k, vh = h() / t.k;
+  minimapSvg.append("rect")
+    .attr("class","viewport")
+    .attr("x", tx(vx)).attr("y", ty(vy))
+    .attr("width", vw * scale).attr("height", vh * scale);
+}
+
+// ═══════════════════════════════════════
+// 导出
+// ═══════════════════════════════════════
+function exportSVG() {
+  const clone = svg.node().cloneNode(true);
+  const serializer = new XMLSerializer();
+  const svgStr = serializer.serializeToString(clone);
+  const blob = new Blob([svgStr], {type:"image/svg+xml"});
+  downloadBlob(blob, "写作创意.svg");
+}
+
+function exportPNG() {
+  const clone = svg.node().cloneNode(true);
+  const s = new XMLSerializer().serializeToString(clone);
+  const canvas = document.createElement("canvas");
+  canvas.width = w() * 2; canvas.height = h() * 2;
+  const ctx = canvas.getContext("2d");
+  ctx.fillStyle = "#0f0f1a";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  const img = new Image();
+  const blob = new Blob([s], {type:"image/svg+xml;charset=utf-8"});
+  const url = URL.createObjectURL(blob);
+  img.onload = () => {
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    URL.revokeObjectURL(url);
+    canvas.toBlob(b => {
+      downloadBlob(b, "写作创意.png");
+    }, "image/png");
+  };
+  img.src = url;
+}
+
+function exportJSON() {
+  const data = { graph, nodePos };
+  const blob = new Blob([JSON.stringify(data, null, 2)], {type:"application/json"});
+  downloadBlob(blob, "写作创意.json");
+}
+
+function downloadBlob(blob, filename) {
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(a.href);
+  document.getElementById("saveStatus").textContent = "✓ 已导出 " + filename;
+  setTimeout(() => { document.getElementById("saveStatus").textContent = ""; }, 2000);
+}
+
+// ═══════════════════════════════════════
+// 删除节点（级联删除所有子孙）
+// ═══════════════════════════════════════
+function deleteNode(node) {
+  const label = node.label;
+  const isRoot = isCenter(node);
+
+  function collectDescendants(parentLabel) {
+    const children = graph.edges.filter(e => e.source === parentLabel).map(e => e.target);
+    let all = [...children];
+    children.forEach(c => { all = all.concat(collectDescendants(c)); });
+    return all;
+  }
+  const toRemove = new Set([label, ...collectDescendants(label)]);
+  graph.nodes = graph.nodes.filter(n => !toRemove.has(n.label));
+  graph.edges = graph.edges.filter(e => !toRemove.has(e.target) && !toRemove.has(e.source));
+  toRemove.forEach(l => delete nodePos[l]);
+
+  if (isRoot) {
+    graph.roots = graph.roots.filter(r => r !== label);
+    if (graph.roots.length === 0 && graph.nodes.length === 0) {
+      g.selectAll("*").remove();
+      minimapSvg.selectAll("*").remove();
+      saveToStorage();
+      return;
+    }
+  }
+  draw();
+}
+
+// ═══════════════════════════════════════
+// 键盘快捷键
+// ═══════════════════════════════════════
+document.addEventListener("keydown", e => {
+  // 不在输入框内时处理
+  const tag = document.activeElement?.tagName;
+  const isInput = tag === "INPUT" || tag === "TEXTAREA";
+
+  if (e.ctrlKey && e.key === "s") { e.preventDefault(); saveToStorage(); return; }
+  if (e.ctrlKey && e.key === "e") { e.preventDefault(); exportPNG(); return; }
+  if (e.ctrlKey && e.key === "j") { e.preventDefault(); exportJSON(); return; }
+
+  if (e.key === "Delete" || e.key === "Backspace") {
+    if (isInput) return;
+    e.preventDefault();
+    const target = hoveredNode || selectedNode;
+    if (target) {
+      deleteNode(target);
+      selectedNode = null;
+      hoveredNode = null;
+    }
+    return;
+  }
+  if (e.key === "Escape") {
+    selectedNode = null;
+    hoveredNode = null;
+    document.getElementById("shortcuts-panel").style.display = "none";
+    draw();
+    return;
+  }
+  if (e.key === "?") {
+    const panel = document.getElementById("shortcuts-panel");
+    panel.style.display = panel.style.display === "block" ? "none" : "block";
+    return;
+  }
+  if (e.key === "=" || e.key === "+") {
+    if (isInput) return;
+    svg.transition().duration(200).call(zoom.scaleBy, 1.3);
+    return;
+  }
+  if (e.key === "-") {
+    if (isInput) return;
+    svg.transition().duration(200).call(zoom.scaleBy, 0.7);
+    return;
+  }
+  if (e.key === "0") {
+    if (isInput) return;
+    e.preventDefault();
+    if (activeSim) { activeSim.stop(); activeSim = null; }
+    graph = { nodes:[], edges:[], roots:[] };
+    nodePos = {}; nextId = 1; selectedNode = null; hoveredNode = null;
+    g.selectAll("*").remove();
+    minimapSvg.selectAll("*").remove();
+    localStorage.removeItem(STORAGE_KEY);
+    document.getElementById("saveStatus").textContent = "✓ 已清空";
+    setTimeout(() => { document.getElementById("saveStatus").textContent = ""; }, 1500);
+    return;
+  }
+  if (e.key === "f" || e.key === "F") {
+    fitToScreen();
+    return;
+  }
+
+});
+
+function toggleShortcuts() {
+  const panel = document.getElementById("shortcuts-panel");
+  panel.style.display = panel.style.display === "block" ? "none" : "block";
+}
+
+function fitToScreen() {
+  if (!graph.nodes.length) return;
+  const allX = graph.nodes.map(d => nodePos[d.label]?.x || w()/2);
+  const allY = graph.nodes.map(d => nodePos[d.label]?.y || h()/2);
+  const minX = Math.min(...allX), maxX = Math.max(...allX);
+  const minY = Math.min(...allY), maxY = Math.max(...allY);
+  const dx = maxX - minX || 1, dy = maxY - minY || 1;
+  const scale = Math.min(w()/dx, h()/dy) * 0.85;
+  const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
+  svg.transition().duration(500).call(
+    zoom.transform,
+    d3.zoomIdentity.translate(w()/2, h()/2).scale(scale).translate(-cx, -cy)
+  );
+}
+
+// ═══════════════════════════════════════
+// 布局 & 碰撞
+// ═══════════════════════════════════════
+// ═══════════════════════════════════════
+// 圆形发散布局（首次输入用）
+// ═══════════════════════════════════════
+function radialLayout(parentLabel, children) {
+  const cx = nodePos[parentLabel]?.x ?? w()/2;
+  const cy = nodePos[parentLabel]?.y ?? h()/2;
+  const n = children.length;
+  const radius = Math.max(120, n * 18);
+  const angleStep = (2*Math.PI)/n;
+  const baseAngle = Math.atan2(cy - h()/2, cx - w()/2);
+  children.forEach((d, i) => {
+    const angle = baseAngle + (i - (n-1)/2) * angleStep * 0.8;
+    const r = radius + (i%3) * 20;
+    nodePos[d.label] = { x: cx + r*Math.cos(angle), y: cy + r*Math.sin(angle) };
+  });
+}
+
+// ═══════════════════════════════════════
+// 全局树形重排（d3.tree）
+// ═══════════════════════════════════════
+function rearrangeAsTree() {
+  if (!graph.roots.length || !graph.nodes.length) return;
+
+  // 构建 d3 层级数据：虚拟根 → 各 root → children...
+  function buildHierarchy(label, visited = new Set()) {
+    if (visited.has(label)) return { name: label, children: [] };
+    visited.add(label);
+    const children = graph.edges
+      .filter(e => e.source === label)
+      .map(e => e.target);
+    return {
+      name: label,
+      children: children.map(c => buildHierarchy(c, visited)),
+    };
+  }
+
+  // 虚拟根下挂所有 root
+  const rootTrees = graph.roots.map(r => buildHierarchy(r));
+  const rootData = { name: "__virtual__", children: rootTrees };
+
+  const rootH = d3.hierarchy(rootData);
+
+  const treeLayout = d3.tree()
+    .nodeSize([60, 90])
+    .separation((a, b) => (a.parent === b.parent ? 2.0 : 2.5));
+
+  treeLayout(rootH);
+
+  // 根据实际树范围居中，并为多棵树之间加额外间隔
+  const rootChildren = rootH.children; // 各棵树的根节点
+  if (rootChildren && rootChildren.length > 1) {
+    const extraGap = 200; // 两棵树之间的额外像素间距
+    for (let i = 0; i < rootChildren.length; i++) {
+      const dx = i * extraGap;
+      rootChildren[i].descendants().forEach(d => { d.x += dx; });
+    }
+  }
+  const xs = rootH.descendants().map(d => d.x);
+  const minX = Math.min(...xs), maxX = Math.max(...xs);
+  const treeActualW = maxX - minX;
+  const offsetX = (w() - treeActualW) / 2 - minX;
+  const offsetY = 80;
+
+  // 写回位置字典
+  rootH.descendants().forEach(d => {
+    if (d.data.name === "__virtual__") return;
+    nodePos[d.data.name] = { x: d.x + offsetX, y: d.y + offsetY };
+  });
+}
+
+// ── 兼容旧名 ──
+function initLayout(parentLabel, children) {
+  radialLayout(parentLabel, children);
+}
+
+function resolveCollisions() {
+  if (activeSim) { activeSim.stop(); activeSim = null; }
+  const allNodes = graph.nodes.filter(d => !isCenter(d));
+  if (allNodes.length < 2) return;
+
+  const nodeGroups = g.selectAll("g").filter(function(d) { return !isCenter(d); });
+  const simNodes = allNodes.map(d => ({
+    label: d.label,
+    x: nodePos[d.label]?.x ?? w()/2,
+    y: nodePos[d.label]?.y ?? h()/2,
+  }));
+
+  const sim = d3.forceSimulation(simNodes)
+    .force("collision", d3.forceCollide().radius(NODE_RADIUS+30))
+    .alphaDecay(0.08).alpha(0.6)
+    .on("tick", () => {
+      nodeGroups.attr("transform", d => {
+        if (!d) return "";
+        const sd = simNodes.find(s => s.label===d.label);
+        if (sd) return `translate(${sd.x},${sd.y})`;
+        const pos = nodePos[d.label];
+        return pos ? `translate(${pos.x},${pos.y})` : "";
+      });
+      g.selectAll("line")
+        .attr("x1", d => (nodePos[d.source]||simNodes.find(s=>s.label===d.source)||{}).x||0)
+        .attr("y1", d => (nodePos[d.source]||simNodes.find(s=>s.label===d.source)||{}).y||0)
+        .attr("x2", d => (nodePos[d.target]||simNodes.find(s=>s.label===d.target)||{}).x||0)
+        .attr("y2", d => (nodePos[d.target]||simNodes.find(s=>s.label===d.target)||{}).y||0);
+      updateMinimap();
+    })
+    .on("end", () => {
+      simNodes.forEach(d => { nodePos[d.label] = { x:d.x, y:d.y }; });
+      if (activeSim===sim) activeSim = null;
+    });
+  activeSim = sim;
+}
+
+// ═══════════════════════════════════════
+// 构建图 & 展开
+// ═══════════════════════════════════════
+function buildGraph(apiData) {
+  graph.roots = [apiData.center];
+  graph.nodes = [];
+  graph.edges = [];
+
+  // 根节点始终在最前面
+  const cx = w()/2, cy = h()/2;
+  graph.nodes.push({ id:"root", label:apiData.center, category:"center" });
+  nodePos[apiData.center] = { x:cx, y:cy };  // 覆盖旧位置
+
+  const children = apiData.nodes.map(n => ({
+    id: uid(), label: n.label,
+    category: n.category||"semantic", _expanded: false,
+  }));
+  graph.nodes.push(...children);
+
+  // 使用 API 返回的边（深度>1 时含多层级），否则自己构建一层边
+  if (apiData.edges && apiData.edges.length > 0) {
+    graph.edges = apiData.edges;
+  } else {
+    graph.edges = children.map(c => ({ source:apiData.center, target:c.label }));
+  }
+
+  // 深度>1：首层径向 + 深层树形 混合布局
+  const depth = +document.getElementById("depthSelect").value;
+  if (depth > 1) {
+    // 1) 先用 d3.tree 算出所有节点的基础位置
+    rearrangeAsTree();
+
+    // 2) 把根节点的直接子节点改成径向布局
+    const directChildLabels = graph.edges
+      .filter(e => e.source === apiData.center)
+      .map(e => e.target);
+    const directChildren = directChildLabels.map(l =>
+      graph.nodes.find(n => n.label === l)
+    ).filter(Boolean);
+
+    // 记下旧位置
+    const oldPos = {};
+    directChildLabels.forEach(l => { oldPos[l] = { ...nodePos[l] }; });
+
+    // 径向排列直接子节点
+    radialLayout(apiData.center, directChildren);
+
+    // 3) 把每个直接子节点的子树整体平移到新位置
+    const visited = new Set([apiData.center]);
+    function collectDescendants(label) {
+      const result = [];
+      const queue = [label];
+      while (queue.length) {
+        const cur = queue.pop();
+        if (visited.has(cur)) continue;
+        visited.add(cur);
+        result.push(cur);
+        graph.edges
+          .filter(e => e.source === cur)
+          .forEach(e => queue.push(e.target));
+      }
+      return result;
+    }
+    directChildLabels.forEach(label => {
+      const old = oldPos[label], neu = nodePos[label];
+      if (!old || !neu) return;
+      const dx = neu.x - old.x, dy = neu.y - old.y;
+      collectDescendants(label).forEach(d => {
+        if (nodePos[d]) { nodePos[d].x += dx; nodePos[d].y += dy; }
+      });
+    });
+  } else {
+    initLayout(apiData.center, children);
+  }
+  draw();
+  resolveCollisions();
+}
+
+async function expandNode(node) {
+  if (node._expanded) return;
+  node._expanded = true;
+  const loading = document.getElementById("loading");
+  const loadingText = document.getElementById("loadingText");
+  loading.style.display = "flex";
+  loadingText.textContent = `正在构思「${node.label}」…`;
+
+  try {
+    const resp = await fetch("/api/generate", {
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({ word: node.label }),
+    });
+    if (!resp.ok) throw new Error((await resp.json()).detail || "未知错误");
+    const raw = await resp.json();
+    const children = raw.nodes.slice(0, 1).map(n => ({
+      id: uid(), label: n.label,
+      category: n.category||"semantic", _expanded: false,
+    }));
+    graph.nodes.push(...children);
+    graph.edges.push(...children.map(c => ({ source:node.label, target:c.label })));
+    rearrangeAsTree();  // 全局树形重排
+    draw();
+  } catch(err) {
+    node._expanded = false;
+    alert("发散失败: " + err.message);
+  } finally {
+    loading.style.display = "none";
+    selectedNode = null;
+  }
+}
+
+async function doGenerate() {
+  const word = document.getElementById("wordInput").value.trim();
+  if (!word) return;
+
+  const btn = document.getElementById("generateBtn");
+  const loading = document.getElementById("loading");
+  const loadingText = document.getElementById("loadingText");
+  btn.disabled = true;
+  loading.style.display = "flex";
+  loadingText.textContent = `正在构思「${word}」…`;
+
+  // 如果已有图：新词作为根节点的额外子节点加入
+  if (graph.roots.length > 0) {
+    addToExisting(word);
+    return;
+  }
+
+  // 全新开始
+  if (activeSim) { activeSim.stop(); activeSim = null; }
+  graph = { nodes:[], edges:[], roots:[] };
+  nodePos = {}; nextId = 1; selectedNode = null; hoveredNode = null;
+  g.selectAll("*").remove();
+
+  try {
+    const resp = await fetch("/api/generate", {
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({ word, depth: +document.getElementById("depthSelect").value }),
+    });
+    if (!resp.ok) throw new Error((await resp.json()).detail || "未知错误");
+    buildGraph(await resp.json());
+    svg.transition().duration(750).call(zoom.transform, d3.zoomIdentity);
+  } catch(err) {
+    alert("发散失败: " + err.message);
+  } finally {
+    btn.disabled = false;
+    loading.style.display = "none";
+  }
+}
+
+// 将新词加入已有图（作为新的根节点，形成独立树）
+async function addToExisting(word) {
+  const btn = document.getElementById("generateBtn");
+  const loading = document.getElementById("loading");
+  const loadingText = document.getElementById("loadingText");
+
+  try {
+    const resp = await fetch("/api/generate", {
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({ word, depth: +document.getElementById("depthSelect").value }),
+    });
+    if (!resp.ok) throw new Error((await resp.json()).detail || "未知错误");
+    const raw = await resp.json();
+
+    // 检查这个词是否已作为根节点存在
+    if (!graph.roots.includes(word)) {
+      graph.roots.push(word);
+      graph.nodes.push({ id: "root", label: word, category: "center" });
+      nodePos[word] = { x: w()/2 + Math.random() * 40 - 20, y: h()/2 + Math.random() * 40 - 20 };
+    }
+
+    const children = raw.nodes.map(n => ({
+      id: uid(), label: n.label,
+      category: n.category||"semantic", _expanded: false,
+    }));
+    graph.nodes.push(...children);
+    // 使用 API 返回的边（深度>1 时含多层级），否则自己构建一层边
+    if (raw.edges && raw.edges.length > 0) {
+      graph.edges.push(...raw.edges);
+    } else {
+      graph.edges.push(...children.map(c => ({ source: word, target: c.label })));
+    }
+
+    rearrangeAsTree();
+    draw();
+
+    document.getElementById("saveStatus").textContent = `✓ 已添加「${word}」`;
+    setTimeout(() => { document.getElementById("saveStatus").textContent = ""; }, 2000);
+  } catch(err) {
+    alert("发散失败: " + err.message);
+  } finally {
+    btn.disabled = false;
+    loading.style.display = "none";
+  }
+}
+
+// ═══════════════════════════════════════
+// 点击空白取消选中
+// ═══════════════════════════════════════
+svg.on("click", () => {
+  if (selectedNode) { selectedNode = null; draw(); }
+});
+
+document.getElementById("wordInput").addEventListener("keydown", e => {
+  if (e.key === "Enter") doGenerate();
+});
+
+window.addEventListener("resize", () => {
+  if (graph.nodes.length > 0) draw();
+});
+
+// ═══════════════════════════════════════
+// 启动时恢复
+// ═══════════════════════════════════════
+(function init() {
+  const restored = loadFromStorage();
+  if (restored && graph.nodes.length > 0) {
+    // 重新计算节点位置中缺失的（兼容旧数据）
+    graph.nodes.forEach(d => {
+      if (!nodePos[d.label]) nodePos[d.label] = { x:w()/2, y:h()/2 };
+    });
+    draw();
+    fitToScreen();
+  }
+})();
+</script>
+</body>
+</html>
