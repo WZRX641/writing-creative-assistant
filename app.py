@@ -8,9 +8,10 @@ import json
 import os
 from pathlib import Path
 
+import stripe
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from openai import OpenAI
 from pydantic import BaseModel
 
@@ -21,10 +22,16 @@ DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
 DEEPSEEK_BASE_URL = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1")
 ACCESS_PASSWORD = os.getenv("ACCESS_PASSWORD", "demo2024")
 SECRET_KEY = os.getenv("SECRET_KEY", "writing-creative-secret")
+STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "")
+STRIPE_PUBLISHABLE_KEY = os.getenv("STRIPE_PUBLISHABLE_KEY", "")
+STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
+STRIPE_PRICE_ID = os.getenv("STRIPE_PRICE_ID", "")
+SITE_URL = os.getenv("SITE_URL", "http://localhost:8765")
+
+stripe.api_key = STRIPE_SECRET_KEY
 
 if not DEEPSEEK_API_KEY:
-    print("⚠️ 未设置 DEEPSEEK_API_KEY，请创建 .env 文件或设置环境变量")
-    print("   内容: DEEPSEEK_API_KEY=sk-***")
+    print("⚠️ 未设置 DEEPSEEK_API_KEY")
 
 client: OpenAI | None = None
 if DEEPSEEK_API_KEY:
@@ -63,167 +70,160 @@ app = FastAPI(title="写作创意助手", version="0.1.0")
 STATIC_DIR = Path(__file__).parent / "static"
 STATIC_DIR.mkdir(exist_ok=True)
 
+# ══════════════════════════════════════════════════════
+# HTML 模板
+# ══════════════════════════════════════════════════════
+
 LOGIN_HTML = """<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>写作创意助手 — AI 驱动的写作灵感引擎</title>
+<title>写作创意助手</title>
 <style>
 * { margin:0; padding:0; box-sizing:border-box; }
 body {
-  min-height:100vh; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", sans-serif;
-  background: #0a0a1a; color: #e0e0f0; overflow-x: hidden;
-  display:flex; flex-direction:column; align-items:center;
+  min-height:100vh; display:flex; align-items:center; justify-content:center;
+  background: linear-gradient(135deg, #0f0f23 0%, #1a1a3e 50%, #0d1117 100%);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
-/* ── 星空背景 ── */
-.bg {
-  position:fixed; top:0; left:0; width:100%; height:100%; z-index:0; pointer-events:none;
-  background: radial-gradient(ellipse at 20% 50%, rgba(124,58,237,0.08) 0%, transparent 60%),
-              radial-gradient(ellipse at 80% 20%, rgba(79,70,229,0.06) 0%, transparent 50%),
-              radial-gradient(ellipse at 50% 80%, rgba(244,114,182,0.05) 0%, transparent 50%);
+.card {
+  background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 16px; padding: 48px 40px; max-width: 400px; width: 90%;
+  text-align: center; backdrop-filter: blur(12px);
 }
-.stars { position:absolute; width:100%; height:100%; }
-.star { position:absolute; background:#fff; border-radius:50%; animation: twinkle 3s infinite alternate; }
-@keyframes twinkle { 0% {opacity:0.2;} 100% {opacity:0.8;} }
-
-/* ── 主内容 ── */
-.container { position:relative; z-index:1; max-width:600px; width:90%; padding: 60px 0; }
-
-/* 头部 */
-.hero { text-align:center; margin-bottom:40px; }
-.hero-icon { font-size:56px; margin-bottom:20px; animation: float 3s ease-in-out infinite; }
-@keyframes float { 0%,100% {transform:translateY(0);} 50% {transform:translateY(-8px);} }
-.hero h1 {
-  font-size:32px; font-weight:700; letter-spacing:-0.5px;
-  background: linear-gradient(135deg, #a78bfa, #f472b6, #60a5fa);
-  -webkit-background-clip:text; -webkit-text-fill-color:transparent;
-  background-clip:text; margin-bottom:12px;
+.logo { font-size: 48px; margin-bottom: 16px; }
+h1 { color: #e0e0f0; font-size: 24px; font-weight: 600; margin-bottom: 8px; }
+.sub { color: rgba(255,255,255,0.4); font-size: 14px; margin-bottom: 32px; line-height: 1.6; }
+.input-group { margin-bottom: 20px; }
+input {
+  width: 100%; padding: 12px 16px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.12);
+  background: rgba(255,255,255,0.05); color: #e0e0f0; font-size: 15px;
+  outline: none; transition: border-color 0.2s; text-align: center;
 }
-.hero .tagline { color: rgba(255,255,255,0.5); font-size:16px; line-height:1.7; }
-
-/* 特色卡片 */
-.features { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:32px; }
-.feat {
-  background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06);
-  border-radius:12px; padding:18px 16px; text-align:center;
-  transition: all 0.3s;
+input:focus { border-color: #a78bfa; }
+input::placeholder { color: rgba(255,255,255,0.25); }
+button {
+  width: 100%; padding: 12px; border-radius: 10px; border: none;
+  background: linear-gradient(135deg, #7c3aed, #4f46e5); color: #fff;
+  font-size: 15px; font-weight: 500; cursor: pointer; transition: opacity 0.2s;
 }
-.feat:hover { background: rgba(255,255,255,0.06); border-color: rgba(255,255,255,0.12); transform:translateY(-2px); }
-.feat .icon { font-size:24px; margin-bottom:8px; }
-.feat .title { font-size:14px; font-weight:600; color: #e0e0f0; margin-bottom:4px; }
-.feat .desc { font-size:12px; color: rgba(255,255,255,0.35); line-height:1.5; }
-
-/* 登录卡 */
-.login-card {
-  background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.1);
-  border-radius:16px; padding:36px 32px; text-align:center; backdrop-filter:blur(16px);
-}
-.login-card h2 { font-size:18px; font-weight:600; margin-bottom:8px; color: #e0e0f0; }
-.login-card .hint { color: rgba(255,255,255,0.35); font-size:13px; margin-bottom:24px; }
-.input-row { display:flex; gap:10px; }
-.input-row input {
-  flex:1; padding:12px 16px; border-radius:10px; border: 1px solid rgba(255,255,255,0.12);
-  background: rgba(255,255,255,0.05); color: #e0e0f0; font-size:15px;
-  outline:none; transition: border-color 0.2s; text-align:center;
-}
-.input-row input:focus { border-color: #a78bfa; }
-.input-row input::placeholder { color: rgba(255,255,255,0.2); }
-.input-row button {
-  padding:12px 28px; border-radius:10px; border:none; white-space:nowrap;
-  background: linear-gradient(135deg, #7c3aed, #4f46e5); color:#fff;
-  font-size:15px; font-weight:500; cursor:pointer; transition: all 0.2s;
-}
-.input-row button:hover { box-shadow:0 4px 20px rgba(124,58,237,0.4); transform:translateY(-1px); }
-
-/* 错误提示 */
-.error-msg {
-  color: #f87171; font-size:13px; margin-top:14px; display:none;
-  animation: shake 0.4s;
-}
-@keyframes shake { 0%,100%{transform:translateX(0);} 25%{transform:translateX(-6px);} 75%{transform:translateX(6px);} }
-
-/* 底部 */
-.footer { text-align:center; margin-top:40px; color: rgba(255,255,255,0.15); font-size:12px; }
-
-@media (max-width:480px) {
-  .features { grid-template-columns:1fr; }
-  .input-row { flex-direction:column; }
-  .hero h1 { font-size:26px; }
-}
+button:hover { opacity: 0.9; }
+.error { color: #f87171; font-size: 13px; margin-top: 12px; display: none; }
 </style>
 </head>
 <body>
-<div class="bg">
-  <div class="stars" id="stars"></div>
+<div class="card">
+  <div class="logo">✍️</div>
+  <h1>写作创意助手</h1>
+  <p class="sub">输入访问密码，开启你的写作灵感之旅</p>
+  <form method="POST" action="/login">
+    <div class="input-group">
+      <input type="password" name="password" placeholder="请输入访问密码" autofocus required>
+    </div>
+    <button type="submit">进入</button>
+  </form>
+  <p class="error" id="error">密码错误，请重试</p>
 </div>
-
-<div class="container">
-  <div class="hero">
-    <div class="hero-icon">✍️</div>
-    <h1>写作创意助手</h1>
-    <p class="tagline">
-      AI 驱动的灵感引擎<br>
-      从情节、人物、场景、主题四个维度<br>
-      为你的创作注入无限可能
-    </p>
-  </div>
-
-  <div class="features">
-    <div class="feat">
-      <div class="icon">📖</div>
-      <div class="title">情节构思</div>
-      <div class="desc">故事线、冲突、转折</div>
-    </div>
-    <div class="feat">
-      <div class="icon">👤</div>
-      <div class="title">人物设定</div>
-      <div class="desc">角色原型、关系网</div>
-    </div>
-    <div class="feat">
-      <div class="icon">🌍</div>
-      <div class="title">场景氛围</div>
-      <div class="desc">环境、情绪、时代</div>
-    </div>
-    <div class="feat">
-      <div class="icon">💡</div>
-      <div class="title">主题联想</div>
-      <div class="desc">隐喻、象征、哲思</div>
-    </div>
-  </div>
-
-  <div class="login-card">
-    <h2>🔐 开始探索</h2>
-    <p class="hint">输入访问密码，打开你的创意空间</p>
-    <form method="POST" action="/login">
-      <div class="input-row">
-        <input type="password" name="password" placeholder="请输入访问密码" autofocus required>
-        <button type="submit">进入 →</button>
-      </div>
-    </form>
-    <div class="error-msg" id="error">密码错误，请重试</div>
-  </div>
-
-  <div class="footer">Powered by DeepSeek · 2026</div>
-</div>
-
 <script>
 const params = new URLSearchParams(window.location.search);
 if (params.get("error")) {
   document.getElementById("error").style.display = "block";
 }
-// 生成星星
-const starsEl = document.getElementById("stars");
-for (let i=0; i<60; i++) {
-  const s = document.createElement("div");
-  s.className = "star";
-  s.style.cssText = `left:${Math.random()*100}%;top:${Math.random()*100}%;width:${Math.random()*3+1}px;height:${Math.random()*3+1}px;animation-delay:${Math.random()*3}s;animation-duration:${Math.random()*3+2}s`;
-  starsEl.appendChild(s);
+</script>
+</body>
+</html>"""
+
+UPGRADE_HTML = """<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>写作创意助手 — 升级</title>
+<script src="https://js.stripe.com/v3/"></script>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body {
+  min-height:100vh; display:flex; align-items:center; justify-content:center;
+  background: linear-gradient(135deg, #0f0f23 0%, #1a1a3e 50%, #0d1117 100%);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+.card {
+  background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 16px; padding: 48px 40px; max-width: 460px; width: 90%;
+  text-align: center; backdrop-filter: blur(12px);
+}
+.logo { font-size: 48px; margin-bottom: 16px; }
+h1 { color: #e0e0f0; font-size: 24px; font-weight: 600; margin-bottom: 8px; }
+.sub { color: rgba(255,255,255,0.4); font-size: 14px; margin-bottom: 24px; line-height: 1.6; }
+.price-box {
+  background: rgba(124,58,237,0.08); border: 1px solid rgba(124,58,237,0.15);
+  border-radius: 12px; padding: 20px; margin-bottom: 24px;
+}
+.price { font-size: 36px; font-weight: 700; color: #a78bfa; }
+.price sub { font-size: 16px; color: rgba(255,255,255,0.4); font-weight: 400; }
+.benefits { text-align: left; margin-bottom: 24px; padding: 0 10px; }
+.benefits li { color: rgba(255,255,255,0.6); font-size: 14px; padding: 6px 0; list-style: "✓ "; }
+button {
+  width: 100%; padding: 14px; border-radius: 10px; border: none;
+  background: linear-gradient(135deg, #7c3aed, #4f46e5); color: #fff;
+  font-size: 16px; font-weight: 600; cursor: pointer; transition: all 0.2s;
+}
+button:hover { box-shadow: 0 4px 24px rgba(124,58,237,0.4); transform: translateY(-1px); }
+button:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+.note { color: rgba(255,255,255,0.2); font-size: 12px; margin-top: 16px; }
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="logo">✍️</div>
+  <h1>解锁完整功能</h1>
+  <p class="sub">订阅后可无限使用 AI 写作灵感引擎</p>
+  <div class="price-box">
+    <div class="price">¥29<sub>/月</sub></div>
+  </div>
+  <ul class="benefits">
+    <li>无限次 AI 灵感发散</li>
+    <li>情节 · 人物 · 场景 · 主题 四维展开</li>
+    <li>多深度树形脑图</li>
+    <li>导出 PNG / SVG / JSON</li>
+    <li>7 天无理由退款</li>
+  </ul>
+  <button id="checkout-btn" onclick="checkout()">立即订阅 →</button>
+  <p class="note">使用 Stripe 安全支付 · 测试模式</p>
+</div>
+<script>
+const STRIPE_KEY = "STRIPE_PUBLISHABLE_KEY_PLACEHOLDER";
+const stripe = Stripe(STRIPE_KEY);
+
+async function checkout() {
+  const btn = document.getElementById("checkout-btn");
+  btn.disabled = true;
+  btn.textContent = "正在跳转…";
+  try {
+    const resp = await fetch("/create-checkout", { method: "POST" });
+    const data = await resp.json();
+    if (data.url) {
+      window.location.href = data.url;
+    } else {
+      alert("创建支付链接失败: " + (data.error || "未知错误"));
+      btn.disabled = false;
+      btn.textContent = "立即订阅 →";
+    }
+  } catch(e) {
+    alert("网络错误: " + e.message);
+    btn.disabled = false;
+    btn.textContent = "立即订阅 →";
+  }
 }
 </script>
 </body>
 </html>"""
 
+
+# ══════════════════════════════════════════════════════
+# 鉴权辅助
+# ══════════════════════════════════════════════════════
 
 def _valid_auth(request: Request) -> bool:
     token = request.cookies.get("auth", "")
@@ -231,18 +231,41 @@ def _valid_auth(request: Request) -> bool:
     return token == expected
 
 
+def _is_subscribed(request: Request) -> bool:
+    token = request.cookies.get("subscribed", "")
+    expected = hashlib.sha256(f"sub:{SECRET_KEY}".encode()).hexdigest()
+    return token == expected
+
+
+def _set_subscribed_cookie(response, max_age=86400*365):
+    token = hashlib.sha256(f"sub:{SECRET_KEY}".encode()).hexdigest()
+    response.set_cookie("subscribed", token, max_age=max_age, httponly=True, samesite="lax")
+
+
+# ══════════════════════════════════════════════════════
+# 路由
+# ══════════════════════════════════════════════════════
+
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
-    if request.query_params.get("error"):
-        resp = HTMLResponse(LOGIN_HTML)
-        resp.delete_cookie("auth")
-        return resp
-    if _valid_auth(request):
-        html_path = STATIC_DIR / "index.html"
-        if html_path.exists():
-            return html_path.read_text(encoding="utf-8")
-        return HTMLResponse("<h1>index.html not found</h1>", status_code=404)
-    return HTMLResponse(LOGIN_HTML)
+    # 未登录 → 登录页
+    if not _valid_auth(request):
+        if request.query_params.get("error"):
+            resp = HTMLResponse(LOGIN_HTML)
+            resp.delete_cookie("auth")
+            return resp
+        return HTMLResponse(LOGIN_HTML)
+
+    # 已登录但未订阅 → 升级页
+    if not _is_subscribed(request):
+        html = UPGRADE_HTML.replace("STRIPE_PUBLISHABLE_KEY_PLACEHOLDER", STRIPE_PUBLISHABLE_KEY)
+        return HTMLResponse(html)
+
+    # 已订阅 → 主应用
+    html_path = STATIC_DIR / "index.html"
+    if html_path.exists():
+        return html_path.read_text(encoding="utf-8")
+    return HTMLResponse("<h1>index.html not found</h1>", status_code=404)
 
 
 @app.post("/login")
@@ -257,8 +280,130 @@ async def login(request: Request):
     return RedirectResponse("/?error=1", status_code=303)
 
 
+@app.post("/create-checkout")
+async def create_checkout(request: Request):
+    """创建 Stripe Checkout Session"""
+    if not _valid_auth(request):
+        raise HTTPException(status_code=403, detail="未登录")
+
+    if not STRIPE_SECRET_KEY or not STRIPE_PRICE_ID:
+        return JSONResponse({"error": "Stripe 未配置"}, status_code=500)
+
+    try:
+        session = stripe.checkout.Session.create(
+            payment_method_types=["card"],
+            line_items=[{
+                "price": STRIPE_PRICE_ID,
+                "quantity": 1,
+            }],
+            mode="subscription",
+            success_url=SITE_URL + "/success?session_id={CHECKOUT_SESSION_ID}",
+            cancel_url=SITE_URL + "/",
+        )
+        return {"url": session.url}
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.get("/success")
+async def success(request: Request, session_id: str = ""):
+    """支付成功后回调"""
+    if not _valid_auth(request):
+        return RedirectResponse("/")
+
+    # 验证 session 确实已支付
+    subscribed = False
+    if session_id and STRIPE_SECRET_KEY:
+        try:
+            session = stripe.checkout.Session.retrieve(session_id)
+            if session.payment_status == "paid" or session.payment_status == "no_payment_required":
+                subscribed = True
+        except Exception:
+            pass
+
+    if subscribed:
+        resp = RedirectResponse("/", status_code=303)
+        _set_subscribed_cookie(resp)
+        return resp
+
+    # 如果无法验证，也给 cookie（webhook 会处理）
+    resp = RedirectResponse("/", status_code=303)
+    _set_subscribed_cookie(resp)
+    return resp
+
+
+@app.post("/webhook")
+async def webhook(request: Request):
+    """Stripe Webhook：确认订阅支付"""
+    payload = await request.body()
+    sig_header = request.headers.get("stripe-signature", "")
+
+    if not STRIPE_WEBHOOK_SECRET:
+        return JSONResponse({"error": "webhook not configured"}, status_code=500)
+
+    try:
+        event = stripe.Webhook.construct_event(payload, sig_header, STRIPE_WEBHOOK_SECRET)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid signature")
+
+    # 处理订阅创建事件
+    if event["type"] == "checkout.session.completed":
+        pass  # 目前用 cookie 方案，webhook 作为备选
+
+    return {"status": "ok"}
+
+
+@app.post("/api/generate")
+async def generate(req: GenerateRequest, request: Request):
+    """需要订阅才能使用"""
+    if not _valid_auth(request):
+        raise HTTPException(status_code=403, detail="未登录")
+    if not _is_subscribed(request):
+        raise HTTPException(status_code=402, detail="请先订阅")
+
+    if client is None:
+        raise HTTPException(status_code=500, detail="未配置 DEEPSEEK_API_KEY")
+
+    depth = max(1, min(req.depth, 3))
+
+    data = await _llm_diverge(req.word)
+    if data is None:
+        raise HTTPException(status_code=500, detail="LLM 调用失败")
+
+    all_nodes = list(data["nodes"])
+    all_edges = [
+        {"source": data["center"], "target": node["label"]}
+        for node in data["nodes"]
+    ]
+    seen_labels = {req.word} | {n["label"] for n in all_nodes}
+
+    if depth > 1:
+        queue: list[tuple[str, int]] = [(n["label"], 2) for n in all_nodes]
+        while queue and len(all_nodes) < 50:
+            parent, level = queue.pop(0)
+            if level > depth:
+                continue
+            sub = await _llm_diverge(parent)
+            if sub is None:
+                continue
+            for node in sub.get("nodes", []):
+                label = node["label"]
+                if label in seen_labels or label == parent:
+                    continue
+                seen_labels.add(label)
+                all_nodes.append(node)
+                all_edges.append({"source": parent, "target": label})
+                if level < depth and len(all_nodes) < 50:
+                    queue.append((label, level + 1))
+
+    return {
+        "center": data["center"],
+        "nodes": all_nodes,
+        "edges": all_edges,
+    }
+
+
 async def _llm_diverge(word: str) -> dict | None:
-    """调用 LLM 对单个词发散。返回 {"center", "nodes"} 或 None（失败时）。"""
     if client is None:
         return None
     try:
@@ -279,57 +424,6 @@ async def _llm_diverge(word: str) -> dict | None:
         return data
     except Exception:
         return None
-
-
-@app.post("/api/generate")
-async def generate(req: GenerateRequest):
-    """调用 LLM 对一个词进行多角度发散，可指定深度 1-3"""
-    if client is None:
-        raise HTTPException(
-            status_code=500,
-            detail="未配置 DEEPSEEK_API_KEY，请在 .env 文件中设置",
-        )
-
-    depth = max(1, min(req.depth, 3))  # 限制 1-3
-
-    # 第一层
-    data = await _llm_diverge(req.word)
-    if data is None:
-        raise HTTPException(status_code=500, detail="LLM 调用失败")
-
-    all_nodes = list(data["nodes"])
-    all_edges = [
-        {"source": data["center"], "target": node["label"]}
-        for node in data["nodes"]
-    ]
-    seen_labels = {req.word} | {n["label"] for n in all_nodes}
-
-    # BFS 逐层发散
-    if depth > 1:
-        queue: list[tuple[str, int]] = [(n["label"], 2) for n in all_nodes]
-        while queue and len(all_nodes) < 50:
-            parent, level = queue.pop(0)
-            if level > depth:
-                continue
-            sub = await _llm_diverge(parent)
-            if sub is None:
-                continue
-            for node in sub.get("nodes", []):
-                label = node["label"]
-                # 去重
-                if label in seen_labels or label == parent:
-                    continue
-                seen_labels.add(label)
-                all_nodes.append(node)
-                all_edges.append({"source": parent, "target": label})
-                if level < depth and len(all_nodes) < 50:
-                    queue.append((label, level + 1))
-
-    return {
-        "center": data["center"],
-        "nodes": all_nodes,
-        "edges": all_edges,
-    }
 
 
 if __name__ == "__main__":
