@@ -1,7 +1,6 @@
 """
 写作创意助手 — Writing Creative Assistant
 输入一个主题，AI 从情节、人物、场景、主题四个维度发散写作灵感。
-支持 Stripe 付费订阅（测试模式）。
 """
 
 import json
@@ -10,7 +9,6 @@ import sqlite3
 import uuid
 from pathlib import Path
 
-import stripe
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
@@ -22,10 +20,7 @@ load_dotenv()
 
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
 DEEPSEEK_BASE_URL = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1")
-STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "")
-STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
-STRIPE_PRICE_ID = os.getenv("STRIPE_PRICE_ID", "price_1ThtvFCO83dWpJe0yxf7V532")
-BASE_URL = os.getenv("BASE_URL", "http://localhost:8765")
+ADMIN_KEY = os.getenv("ADMIN_KEY", "admin123")
 
 if not DEEPSEEK_API_KEY:
     print("⚠️ 未设置 DEEPSEEK_API_KEY")
@@ -33,9 +28,6 @@ if not DEEPSEEK_API_KEY:
 client: OpenAI | None = None
 if DEEPSEEK_API_KEY:
     client = OpenAI(api_key=DEEPSEEK_API_KEY, base_url=DEEPSEEK_BASE_URL)
-
-if STRIPE_SECRET_KEY:
-    stripe.api_key = STRIPE_SECRET_KEY
 
 # ── SQLite 持久化 ──────────────────────────────────────
 DB_PATH = Path(__file__).parent / "data.db"
@@ -47,7 +39,6 @@ def _init_db():
             user_id TEXT PRIMARY KEY,
             free_uses INTEGER DEFAULT 10,
             is_pro INTEGER DEFAULT 0,
-            stripe_customer_id TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
@@ -80,30 +71,24 @@ def _use_free(user_id: str) -> int:
     conn.close()
     return remaining
 
-def _set_pro(user_id: str, customer_id: str = ""):
+def _set_pro(user_id: str):
     """将用户设为 Pro"""
     conn = sqlite3.connect(str(DB_PATH))
-    conn.execute(
-        "UPDATE users SET is_pro = 1, stripe_customer_id = ? WHERE user_id = ?",
-        (customer_id, user_id),
-    )
-    if conn.rowcount == 0:
-        conn.execute(
-            "INSERT INTO users (user_id, is_pro, stripe_customer_id) VALUES (?, 1, ?)",
-            (user_id, customer_id),
-        )
+    cur = conn.execute("UPDATE users SET is_pro = 1 WHERE user_id = ?", (user_id,))
+    if cur.rowcount == 0:
+        conn.execute("INSERT INTO users (user_id, is_pro) VALUES (?, 1)", (user_id,))
     conn.commit()
     conn.close()
 
-def _ensure_user(request: Request) -> str:
-    """从 cookie 获取或创建 user_id"""
-    uid = request.cookies.get("uid", "")
-    if not uid:
-        uid = uuid.uuid4().hex
-    return uid
-
 def _is_pro(uid: str) -> bool:
     return _get_user(uid)["is_pro"]
+
+def _all_users() -> list:
+    _init_db()
+    conn = sqlite3.connect(str(DB_PATH))
+    rows = conn.execute("SELECT user_id, free_uses, is_pro, created_at FROM users ORDER BY created_at DESC").fetchall()
+    conn.close()
+    return rows
 
 _init_db()
 
@@ -137,6 +122,7 @@ app = FastAPI(title="写作创意助手", version="0.1.0")
 
 STATIC_DIR = Path(__file__).parent / "static"
 STATIC_DIR.mkdir(exist_ok=True)
+
 
 # ── 落地页（免密码） ──────────────────────────────────
 
@@ -243,7 +229,7 @@ body {
     <p class="hint">无需注册，点击即可开始创作</p>
     <a href="/start" class="btn">开始体验 →</a>
   </div>
-  <div class="footer">Powered by DeepSeek · Stripe 测试模式</div>
+  <div class="footer">Powered by DeepSeek</div>
 </div>
 <script>
 const starsEl = document.getElementById("stars");
@@ -258,12 +244,14 @@ for (let i=0; i<60; i++) {
 </html>"""
 
 
+# ── 付费页（收款码） ──────────────────────────────────
+
 PRICING_HTML = """<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>升级 Pro · 写作创意助手</title>
+<title>永久解锁 Pro · 写作创意助手</title>
 <style>
 * { margin:0; padding:0; box-sizing:border-box; }
 body {
@@ -273,7 +261,7 @@ body {
 }
 .card {
   background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.1);
-  border-radius:20px; padding:48px 40px; max-width:420px; width:90%;
+  border-radius:20px; padding:40px 36px; max-width:480px; width:90%;
   text-align:center; backdrop-filter:blur(16px);
 }
 .badge {
@@ -281,24 +269,42 @@ body {
   color:#fff; font-size:12px; font-weight:600; padding:4px 14px; border-radius:20px;
   margin-bottom:20px; letter-spacing:1px;
 }
-h1 { font-size:28px; font-weight:700; margin-bottom:8px; }
-.price { font-size:48px; font-weight:800; margin:20px 0 4px; }
-.price span { font-size:18px; color: rgba(255,255,255,0.5); font-weight:400; }
-.period { color: rgba(255,255,255,0.4); font-size:14px; margin-bottom:28px; }
-.features { text-align:left; margin-bottom:32px; }
-.features li {
-  list-style:none; padding:8px 0; font-size:14px; color: rgba(255,255,255,0.7);
-  display:flex; align-items:center; gap:8px;
+h1 { font-size:24px; font-weight:700; margin-bottom:6px; }
+.sub { color: rgba(255,255,255,0.4); font-size:14px; margin-bottom:20px; }
+.price { font-size:42px; font-weight:800; margin:16px 0 4px; color: #fbbf24; }
+.price span { font-size:16px; color: rgba(255,255,255,0.5); font-weight:400; }
+.period { color: rgba(255,255,255,0.4); font-size:13px; margin-bottom:24px; }
+
+.qr-section { display:flex; gap:24px; justify-content:center; margin-bottom:20px; flex-wrap:wrap; }
+.qr-box {
+  background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08);
+  border-radius:16px; padding:20px 16px; width:160px;
 }
-.features li::before { content:"✓"; color:#34d399; font-weight:bold; }
-.btn {
-  display:block; width:100%; padding:14px; border-radius:12px; border:none;
-  background: linear-gradient(135deg, #7c3aed, #4f46e5); color:#fff;
-  font-size:16px; font-weight:600; cursor:pointer; text-decoration:none;
-  transition: all 0.2s;
+.qr-box .label { font-size:14px; font-weight:600; margin-bottom:12px; }
+.qr-box .label.wx { color: #34d399; }
+.qr-box .label.alipay { color: #60a5fa; }
+.qr-box .qr-img {
+  width:120px; height:120px; background: rgba(255,255,255,0.05);
+  border-radius:8px; margin:0 auto 10px;
+  display:flex; align-items:center; justify-content:center;
+  font-size:48px;
 }
-.btn:hover { box-shadow:0 6px 24px rgba(124,58,237,0.4); transform:translateY(-1px); }
-.back { display:block; margin-top:16px; color: rgba(255,255,255,0.3); font-size:13px; text-decoration:none; }
+.qr-note { color: rgba(255,255,255,0.25); font-size:11px; }
+
+.steps { text-align:left; margin:24px 0; padding:16px;
+  background: rgba(255,255,255,0.02); border-radius:12px; }
+.steps h3 { font-size:13px; color: rgba(255,255,255,0.6); margin-bottom:10px; }
+.steps ol { padding-left:20px; }
+.steps li { color: rgba(255,255,255,0.5); font-size:13px; padding:4px 0; line-height:1.6; }
+.steps .highlight {
+  display:block; margin-top:10px; padding:10px 14px;
+  background: rgba(124,58,237,0.15); border-radius:8px;
+  font-size:12px; word-break:break-all; color: #a78bfa;
+  font-family: monospace;
+}
+
+.contact { color: rgba(255,255,255,0.35); font-size:12px; margin-bottom:20px; }
+.back { display:block; margin-top:12px; color: rgba(255,255,255,0.3); font-size:13px; text-decoration:none; }
 .back:hover { color: rgba(255,255,255,0.6); }
 </style>
 </head>
@@ -306,28 +312,56 @@ h1 { font-size:28px; font-weight:700; margin-bottom:8px; }
 <div class="card">
   <div class="badge">PRO</div>
   <h1>写作创意助手 Pro</h1>
-  <p style="color:rgba(255,255,255,0.4);font-size:14px;margin-bottom:8px;">解锁全部创作能力</p>
-  <div class="price">$5<span> 永久解锁</span></div>
+  <p class="sub">解锁全部创作能力</p>
+  <div class="price">¥5<span> 永久解锁</span></div>
   <div class="period">一次购买，终身使用</div>
-  <ul class="features">
-    <li>无限次 AI 灵感发散</li>
-    <li>深度 1-3 层递归展开</li>
-    <li>导出 PNG / SVG / JSON</li>
-    <li>优先体验新功能</li>
-  </ul>
-  <a href="/create-checkout" class="btn">🚀 永久解锁 Pro</a>
+
+  <div class="qr-section">
+    <div class="qr-box">
+      <div class="label wx">💚 微信支付</div>
+      <div class="qr-img">📱</div>
+      <div class="qr-note">请替换为你的收款码</div>
+    </div>
+    <div class="qr-box">
+      <div class="label alipay">💙 支付宝</div>
+      <div class="qr-img">📱</div>
+      <div class="qr-note">请替换为你的收款码</div>
+    </div>
+  </div>
+
+  <div class="steps">
+    <h3>📋 开通步骤</h3>
+    <ol>
+      <li>扫码支付 ¥5</li>
+      <li>截图付款凭证</li>
+      <li>将下方 ID + 截图发给管理员</li>
+      <li>管理员手动开通 → 即时生效 ✅</li>
+    </ol>
+    <span class="highlight">🆔 我的用户 ID：<b id="myUid">加载中...</b></span>
+  </div>
+
+  <p class="contact">付款后请联系管理员，发送你的用户 ID 即可开通</p>
+
   <a href="/" class="back">← 返回</a>
 </div>
+
+<script>
+// 读取用户 ID 并显示
+const uid = document.cookie.split('; ').find(r => r.startsWith('uid='));
+document.getElementById('myUid').textContent = uid ? uid.split('=')[1].slice(0,16)+'…' : '未获取（请先进入主页）';
+</script>
 </body>
 </html>"""
 
 
-SUCCESS_HTML = """<!DOCTYPE html>
+# ── 管理后台页 ────────────────────────────────────
+
+ADMIN_HTML = """<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>订阅成功 · 写作创意助手</title>
+<title>管理后台 · 写作创意助手</title>
 <style>
 * { margin:0; padding:0; box-sizing:border-box; }
 body {
@@ -337,27 +371,92 @@ body {
 }
 .card {
   background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.1);
-  border-radius:20px; padding:48px 40px; max-width:420px; width:90%;
-  text-align:center; backdrop-filter:blur(16px);
+  border-radius:20px; padding:36px 32px; max-width:520px; width:90%;
+  backdrop-filter:blur(16px);
 }
-.icon { font-size:64px; margin-bottom:20px; }
-h1 { font-size:24px; font-weight:700; margin-bottom:8px; color:#34d399; }
-p { color: rgba(255,255,255,0.5); font-size:14px; margin-bottom:32px; line-height:1.6; }
+h1 { font-size:22px; font-weight:700; margin-bottom:6px; }
+.sub { color: rgba(255,255,255,0.35); font-size:13px; margin-bottom:24px; }
+.form-group { margin-bottom:14px; }
+.form-group label { display:block; font-size:13px; color: rgba(255,255,255,0.5); margin-bottom:4px; }
+.form-group input {
+  width:100%; padding:10px 14px; border-radius:10px; border:1px solid rgba(255,255,255,0.1);
+  background: rgba(255,255,255,0.04); color:#e0e0f0; font-size:14px; outline:none;
+}
+.form-group input:focus { border-color: #7c3aed; }
 .btn {
-  display:block; width:100%; padding:14px; border-radius:12px; border:none;
-  background: linear-gradient(135deg, #7c3aed, #4f46e5); color:#fff;
-  font-size:16px; font-weight:600; cursor:pointer; text-decoration:none;
+  width:100%; padding:12px; border-radius:10px; border:none;
+  background: linear-gradient(135deg, #34d399, #10b981); color:#111;
+  font-size:15px; font-weight:600; cursor:pointer; margin-top:8px;
 }
-.btn:hover { box-shadow:0 6px 24px rgba(124,58,237,0.4); }
+.btn:hover { box-shadow:0 4px 16px rgba(52,211,153,0.3); }
+.msg { margin-top:12px; padding:10px; border-radius:8px; font-size:13px; display:none; }
+.msg.success { display:block; background: rgba(52,211,153,0.1); color:#34d399; border:1px solid rgba(52,211,153,0.2); }
+.msg.error { display:block; background: rgba(239,68,68,0.1); color:#f87171; border:1px solid rgba(239,68,68,0.2); }
+.table { width:100%; margin-top:20px; border-collapse:collapse; font-size:12px; }
+.table th,.table td { padding:8px 10px; text-align:left; border-bottom:1px solid rgba(255,255,255,0.05); }
+.table th { color: rgba(255,255,255,0.4); font-weight:500; }
+.table td { color: rgba(255,255,255,0.7); font-family:monospace; }
+.table .pro { color:#34d399; }
+.table .free { color:#fbbf24; }
+.back { display:block; margin-top:16px; color: rgba(255,255,255,0.25); font-size:12px; text-align:center; text-decoration:none; }
 </style>
 </head>
 <body>
 <div class="card">
-  <div class="icon">🎉</div>
-  <h1>解锁成功！</h1>
-  <p>你已是 Pro 会员<br>所有高级功能已永久解锁</p>
-  <a href="/" class="btn">开始创作 →</a>
+  <h1>🛠️ 管理后台</h1>
+  <p class="sub">开通 Pro · 查看用户</p>
+
+  <div class="form-group">
+    <label>管理员密钥</label>
+    <input type="password" id="adminKey" placeholder="输入 ADMIN_KEY">
+  </div>
+  <div class="form-group">
+    <label>用户 ID（付费用户的 uid）</label>
+    <input type="text" id="targetUid" placeholder="粘贴用户的 ID">
+  </div>
+  <button class="btn" onclick="activate()">✅ 开通 Pro</button>
+  <div class="msg" id="msg"></div>
+
+  <table class="table" id="userTable">
+    <thead><tr><th>用户 ID</th><th>状态</th><th>剩余</th><th>创建时间</th></tr></thead>
+    <tbody id="userBody"><tr><td colspan="4" style="text-align:center;color:rgba(255,255,255,0.2);">输入密钥后点击按钮刷新</td></tr></tbody>
+  </table>
+
+  <a href="/" class="back">← 返回主页</a>
 </div>
+
+<script>
+async function activate() {
+  const key = document.getElementById('adminKey').value;
+  const uid = document.getElementById('targetUid').value;
+  const msg = document.getElementById('msg');
+  if (!key || !uid) { msg.className='msg error'; msg.textContent='请填写密钥和用户 ID'; return; }
+  try {
+    const resp = await fetch(`/admin/activate?key=${encodeURIComponent(key)}&uid=${encodeURIComponent(uid)}`);
+    const data = await resp.json();
+    msg.className = data.ok ? 'msg success' : 'msg error';
+    msg.textContent = data.ok ? `✅ ${uid.slice(0,12)}… 已开通 Pro！` : `❌ ${data.error}`;
+    if (data.ok) loadUsers();
+  } catch(e) {
+    msg.className='msg error'; msg.textContent='请求失败: '+e.message;
+  }
+}
+
+async function loadUsers() {
+  const key = document.getElementById('adminKey').value;
+  if (!key) return;
+  try {
+    const resp = await fetch(`/admin/users?key=${encodeURIComponent(key)}`);
+    const data = await resp.json();
+    if (!data.ok) return;
+    document.getElementById('userBody').innerHTML = data.users.map(u =>
+      `<tr><td>${u[0].slice(0,16)}…</td><td class="${u[2]?'pro':'free'}">${u[2]?'Pro':'免费'}</td><td>${u[1]}</td><td>${u[3]}</td></tr>`
+    ).join('');
+  } catch(e) {}
+}
+
+document.getElementById('adminKey').addEventListener('input', loadUsers);
+</script>
 </body>
 </html>"""
 
@@ -384,66 +483,38 @@ async def index(request: Request):
     return HTMLResponse(LANDING_HTML)
 
 
-# ── Stripe 付费 ──────────────────────────────────────
+# ── 付费 ──────────────────────────────────────────────
 
 @app.get("/pricing", response_class=HTMLResponse)
 async def pricing_page(request: Request):
     return HTMLResponse(PRICING_HTML)
 
 
-@app.get("/create-checkout")
-async def create_checkout(request: Request):
-    if not STRIPE_SECRET_KEY:
-        return HTMLResponse("<h2>Stripe 未配置</h2>", status_code=500)
-    uid = request.cookies.get("uid", "")
+# ── 管理后台 ──────────────────────────────────────────
+
+@app.get("/admin", response_class=HTMLResponse)
+async def admin_page(request: Request):
+    return HTMLResponse(ADMIN_HTML)
+
+
+@app.get("/admin/activate")
+async def admin_activate(key: str, uid: str):
+    if key != ADMIN_KEY:
+        return JSONResponse({"ok": False, "error": "密钥错误"}, status_code=403)
     if not uid:
-        uid = uuid.uuid4().hex
-    try:
-        checkout_session = stripe.checkout.Session.create(
-            line_items=[{"price": STRIPE_PRICE_ID, "quantity": 1}],
-            mode="payment",
-            client_reference_id=uid,
-            success_url=f"{BASE_URL}/success?session_id={{CHECKOUT_SESSION_ID}}",
-            cancel_url=f"{BASE_URL}/pricing",
-        )
-        resp = RedirectResponse(checkout_session.url, status_code=303)
-        resp.set_cookie("uid", uid, max_age=86400*365, httponly=True, samesite="lax")
-        return resp
-    except Exception as e:
-        return HTMLResponse(f"<h2>创建支付失败: {e}</h2>", status_code=500)
+        return JSONResponse({"ok": False, "error": "请输入用户 ID"})
+    _set_pro(uid.strip())
+    return JSONResponse({"ok": True})
 
 
-@app.get("/success", response_class=HTMLResponse)
-async def success_page(request: Request):
-    return HTMLResponse(SUCCESS_HTML)
+@app.get("/admin/users")
+async def admin_users(key: str):
+    if key != ADMIN_KEY:
+        return JSONResponse({"ok": False, "error": "密钥错误"}, status_code=403)
+    return JSONResponse({"ok": True, "users": _all_users()})
 
 
-@app.post("/webhook")
-async def stripe_webhook(request: Request):
-    payload = await request.body()
-    sig_header = request.headers.get("stripe-signature")
-    if not sig_header or not STRIPE_WEBHOOK_SECRET:
-        return JSONResponse({"error": "missing signature"}, status_code=400)
-    try:
-        event = stripe.Webhook.construct_event(payload, sig_header, STRIPE_WEBHOOK_SECRET)
-    except stripe.error.SignatureVerificationError:
-        return JSONResponse({"error": "invalid signature"}, status_code=400)
-    except Exception:
-        return JSONResponse({"error": "webhook error"}, status_code=400)
-    if event["type"] == "checkout.session.completed":
-        session = event["data"]["object"]
-        uid = session.get("client_reference_id", "")
-        customer_id = session.get("customer", "")
-        if uid:
-            _set_pro(uid, customer_id)
-            print(f"✅ Pro 已激活: {uid}")
-        else:
-            print(f"✅ 支付成功 (未关联用户): {session.get('id')}")
-    elif event["type"] == "customer.subscription.deleted":
-        subscription = event["data"]["object"]
-        print(f"❌ 订阅取消: {subscription.get('id')}")
-    return JSONResponse({"status": "ok"})
-
+# ── API ───────────────────────────────────────────────
 
 @app.get("/api/me")
 async def get_user_info(request: Request):
@@ -456,8 +527,6 @@ async def get_user_info(request: Request):
         "free_remaining": user["free_uses"],
     })
 
-
-# ── API ────────────────────────────────
 
 async def _llm_diverge(word: str) -> dict | None:
     if client is None:
