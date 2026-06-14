@@ -58,7 +58,26 @@ body {
 .toolbar select option {
   background: #1a1a2e; color: #e0e0f0;
 }
-.toolbar select:hover { background: rgba(50,50,70,0.95); }
+/* 用量条 */
+.toolbar .usage { display:flex; align-items:center; gap:6px; margin:0 8px; }
+.usage-bar {
+  width:80px; height:6px; background:rgba(255,255,255,0.08);
+  border-radius:3px; overflow:hidden;
+}
+.usage-fill {
+  height:100%; border-radius:3px; transition:width 0.4s;
+  background:linear-gradient(90deg, #34d399, #60a5fa);
+}
+.usage-fill.low { background:linear-gradient(90deg, #f59e0b, #f87171); }
+.usage-text { font-size:11px; color:rgba(255,255,255,0.5); white-space:nowrap; }
+/* 升级按钮 */
+.btn-upgrade {
+  background:linear-gradient(135deg, #f59e0b, #d97706); color:#fff;
+  padding:6px 14px; border-radius:8px; font-size:13px; font-weight:600;
+  text-decoration:none; white-space:nowrap; transition:all 0.2s;
+}
+.btn-upgrade:hover { box-shadow:0 4px 16px rgba(245,158,11,0.4); transform:translateY(-1px); }
+.toolbar .sep { width: 1px; height: 20px; background: rgba(255,255,255,0.12); margin: 0 4px; }
 .toolbar select:focus { border-color: #a78bfa; }
 .toolbar .status { font-size: 12px; color: rgba(255,255,255,0.35); }
 .toolbar .hint { font-size: 12px; color: rgba(255,255,255,0.3); margin-left: auto; }
@@ -142,6 +161,11 @@ body {
     <option value="3">深度 3</option>
   </select>
   <button class="btn-primary" id="generateBtn" onclick="doGenerate()">✍️ 激发灵感</button>
+  <span class="usage" id="usageDisplay">
+    <span class="usage-bar"><span class="usage-fill" id="usageFill"></span></span>
+    <span class="usage-text" id="usageText"></span>
+  </span>
+  <a class="btn-upgrade" id="btnUpgrade" href="/pricing">⭐ 永久解锁 Pro</a>
   <span class="sep"></span>
   <button class="btn-outline" onclick="exportPNG()" title="Ctrl+E">📷 PNG</button>
   <button class="btn-outline" onclick="exportSVG()">🔲 SVG</button>
@@ -185,6 +209,53 @@ const CATEGORY_NAMES = {
   setting:"场景氛围", theme:"主题联想"
 };
 const CENTER_COLOR = "#f472b6", CENTER_RADIUS = 28, NODE_RADIUS = 12;
+
+// ══════════════════════ 用户状态 ══════════════════════
+let userPro = false, userFreeRemaining = 0;
+
+async function fetchUserInfo() {
+  try {
+    const resp = await fetch("/api/me");
+    if (!resp.ok) return;
+    const data = await resp.json();
+    userPro = data.pro;
+    userFreeRemaining = data.free_remaining;
+    updateUsageUI();
+  } catch(e) {}
+}
+
+function updateUsageUI() {
+  const disp = document.getElementById("usageDisplay");
+  const bar = document.getElementById("usageFill");
+  const text = document.getElementById("usageText");
+  const upg = document.getElementById("btnUpgrade");
+  const depth = document.getElementById("depthSelect");
+  if (userPro) {
+    disp.style.display = "none";
+    upg.style.display = "none";
+    depth.disabled = false;
+  } else {
+    disp.style.display = "flex";
+    upg.style.display = "";
+    depth.value = "1";
+    depth.disabled = true;
+    const pct = Math.max(0, (userFreeRemaining / 10) * 100);
+    bar.style.width = pct + "%";
+    bar.className = userFreeRemaining <= 2 ? "usage-fill low" : "usage-fill";
+    text.textContent = userFreeRemaining <= 0 ? "已用完" : `剩余 ${userFreeRemaining} 次`;
+  }
+}
+
+async function handleGenerateError(resp) {
+  if (resp.status === 402) {
+    alert("🎁 10 次免费额度已用完，永久解锁 Pro 无限使用！");
+    window.location.href = "/pricing";
+    return true;
+  }
+  const detail = (await resp.json().catch(()=>({detail:"未知错误"}))).detail;
+  alert("发散失败: " + detail);
+  return true;
+}
 
 const container = document.getElementById("canvas");
 const w = () => container.clientWidth;
@@ -787,9 +858,9 @@ async function expandNode(node) {
       method:"POST", headers:{"Content-Type":"application/json"},
       body: JSON.stringify({ word: node.label }),
     });
-    if (!resp.ok) throw new Error((await resp.json()).detail || "未知错误");
+    if (!resp.ok) { await handleGenerateError(resp); return; }
     const raw = await resp.json();
-    const children = raw.nodes.slice(0, 1).map(n => ({
+    const children = raw.nodes.slice(0, 5).map(n => ({
       id: uid(), label: n.label,
       category: n.category||"semantic", _expanded: false,
     }));
@@ -797,6 +868,7 @@ async function expandNode(node) {
     graph.edges.push(...children.map(c => ({ source:node.label, target:c.label })));
     rearrangeAsTree();  // 全局树形重排
     draw();
+    await fetchUserInfo();
   } catch(err) {
     node._expanded = false;
     alert("发散失败: " + err.message);
@@ -834,9 +906,10 @@ async function doGenerate() {
       method:"POST", headers:{"Content-Type":"application/json"},
       body: JSON.stringify({ word, depth: +document.getElementById("depthSelect").value }),
     });
-    if (!resp.ok) throw new Error((await resp.json()).detail || "未知错误");
+    if (!resp.ok) { await handleGenerateError(resp); return; }
     buildGraph(await resp.json());
     svg.transition().duration(750).call(zoom.transform, d3.zoomIdentity);
+    await fetchUserInfo();
   } catch(err) {
     alert("发散失败: " + err.message);
   } finally {
@@ -856,7 +929,7 @@ async function addToExisting(word) {
       method:"POST", headers:{"Content-Type":"application/json"},
       body: JSON.stringify({ word, depth: +document.getElementById("depthSelect").value }),
     });
-    if (!resp.ok) throw new Error((await resp.json()).detail || "未知错误");
+    if (!resp.ok) { await handleGenerateError(resp); return; }
     const raw = await resp.json();
 
     // 检查这个词是否已作为根节点存在
@@ -883,6 +956,7 @@ async function addToExisting(word) {
 
     document.getElementById("saveStatus").textContent = `✓ 已添加「${word}」`;
     setTimeout(() => { document.getElementById("saveStatus").textContent = ""; }, 2000);
+    await fetchUserInfo();
   } catch(err) {
     alert("发散失败: " + err.message);
   } finally {
@@ -920,6 +994,9 @@ window.addEventListener("resize", () => {
     fitToScreen();
   }
 })();
+
+// 初始化用户状态
+fetchUserInfo();
 </script>
 </body>
 </html>

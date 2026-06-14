@@ -1,0 +1,29 @@
+https://github.com/WZRX641/writing-creative-assistant
+
+=== 部署步骤 ===
+
+1. 打开上面的 GitHub 链接 → app.py → 铅笔图标编辑
+2. 用下面 app.py 的完整内容替换
+3. requirements.txt 也需要更新
+4. 在 Railway → Variables 添加：
+   - STRIPE_SECRET_KEY = sk_test_你的密钥
+   - STRIPE_WEBHOOK_SECRET = whsec_你的签名密钥
+   - STRIPE_PRICE_ID = price_1ThtvFCO83dWpJe0yxf7V532
+   - BASE_URL = https://writing-creative-assistant-production.up.railway.app
+   已有的 ACCESS_PASSWORD / DEEPSEEK_API_KEY 保持不变
+
+=== app.py 完整代码 ===
+
+请在 GitHub 网页上打开 app.py 文件，用编辑器替换内容。
+为了便于您使用，此处略去长代码。完整代码已保存在：
+/mnt/c/Users/Admin/Desktop/inspire-mind/app.py
+
+=== requirements.txt ===
+
+fastapi
+uvicorn
+openai
+python-dotenv
+pydantic
+python-multipart
+stripe

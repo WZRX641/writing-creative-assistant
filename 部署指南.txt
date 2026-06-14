@@ -1,0 +1,51 @@
+=== 写作创意助手 - Stripe 付款集成 部署指南 ===
+
+一、需要替换的文件：
+─────────────────────────────────────────────
+1. requirements.txt（添加了 stripe 和 python-multipart）
+   打开：https://github.com/WZRX641/writing-creative-assistant/blob/main/requirements.txt
+   点铅笔图标 → 全选删除 → 粘贴以下内容：
+"""
+fastapi>=0.100.0
+uvicorn>=0.23.0
+openai>=1.0.0
+python-dotenv>=1.0.0
+stripe>=9.0.0
+python-multipart>=0.0.9
+"""
+
+2. app.py（完整重写，添加 Stripe）
+   打开：https://github.com/WZRX641/writing-creative-assistant/blob/main/app.py
+   点铅笔图标 → 全选删除 → 粘贴 app.py 的完整内容
+   复制命令：在 WSL 终端运行 cat /mnt/c/Users/Admin/Desktop/inspire-mind/app.py | clip.exe
+   然后 Ctrl+V 粘贴到 GitHub
+
+二、Railway 新增环境变量（共 4 个）：
+─────────────────────────────────────────────
+进入 Railway → 项目 → Variables → 添加：
+
+1. STRIPE_SECRET_KEY = sk_test_你的密钥
+2. STRIPE_PUBLISHABLE_KEY = pk_test_你的公钥
+3. STRIPE_WEBHOOK_SECRET = whsec_你的webhook签名密钥
+4. STRIPE_PRICE_ID = price_你的价格ID
+5. SITE_URL = https://writing-creative-assistant-production.up.railway.app
+
+三、Stripe Dashboard 操作：
+─────────────────────────────────────────────
+1. 创建产品：https://dashboard.stripe.com/test/products
+   - 名称：写作创意助手订阅
+   - 价格：¥29/月（或自定义）
+   - 记下 price_xxx
+
+2. 获取 Webhook 签名密钥：
+   https://dashboard.stripe.com/test/webhooks
+   → Add endpoint → URL 填：
+   https://writing-creative-assistant-production.up.railway.app/webhook
+   → 事件选：checkout.session.completed
+   → 记下 whsec_xxx
+
+四、部署：
+─────────────────────────────────────────────
+GitHub 提交后 Railway 自动重新部署。
+部署完成后访问 https://writing-creative-assistant-production.up.railway.app
+输入密码 → 看到订阅页面 → 点「立即订阅」→ Stripe 测试卡号 4242 4242 4242 4242
