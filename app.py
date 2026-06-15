@@ -12,6 +12,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from openai import OpenAI
 from pydantic import BaseModel
 
@@ -284,10 +285,8 @@ h1 { font-size:24px; font-weight:700; margin-bottom:6px; }
 .qr-box .label.wx { color: #34d399; }
 .qr-box .label.alipay { color: #60a5fa; }
 .qr-box .qr-img {
-  width:120px; height:120px; background: rgba(255,255,255,0.05);
-  border-radius:8px; margin:0 auto 10px;
-  display:flex; align-items:center; justify-content:center;
-  font-size:48px;
+  width:140px; height:140px; border-radius:8px; margin:0 auto 10px;
+  display:block; object-fit:contain;
 }
 .qr-note { color: rgba(255,255,255,0.25); font-size:11px; }
 
@@ -319,13 +318,11 @@ h1 { font-size:24px; font-weight:700; margin-bottom:6px; }
   <div class="qr-section">
     <div class="qr-box">
       <div class="label wx">💚 微信支付</div>
-      <div class="qr-img">📱</div>
-      <div class="qr-note">请替换为你的收款码</div>
+      <img src="/static/微信收款码.png" class="qr-img" alt="微信收款码">
     </div>
     <div class="qr-box">
       <div class="label alipay">💙 支付宝</div>
-      <div class="qr-img">📱</div>
-      <div class="qr-note">请替换为你的收款码</div>
+      <img src="/static/支付宝收款码.jpg" class="qr-img" alt="支付宝收款码">
     </div>
   </div>
 
@@ -607,6 +604,9 @@ async def generate(req: GenerateRequest, request: Request):
         "nodes": all_nodes,
         "edges": all_edges,
     }
+
+
+app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
 if __name__ == "__main__":
