@@ -668,6 +668,10 @@ async def generate(req: GenerateRequest, request: Request):
     return {"center": data["center"], "nodes": all_nodes, "edges": all_edges}
 
 
+# ── 静态文件 ───────────────────────────────────
+app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 8765)))
