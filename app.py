@@ -393,10 +393,7 @@ h1 { font-size:24px; font-weight:700; margin-bottom:6px; }
 </div>
 
 <script>
-// 读取用户 ID
-const uid = document.cookie.split('; ').find(r => r.startsWith('uid='));
-if (!uid) { location.href = '/start'; }
-
+// 从路径获取 uid（后端已验证 cookie）
 function showRegister() {
   document.getElementById('modalOverlay').classList.add('show');
 }
@@ -568,7 +565,12 @@ async def index(request: Request):
 
 @app.get("/pricing", response_class=HTMLResponse)
 async def pricing_page(request: Request):
-    return HTMLResponse(PRICING_HTML)
+    uid = request.cookies.get("uid", "")
+    resp = HTMLResponse(PRICING_HTML)
+    if not uid:
+        uid = uuid.uuid4().hex
+        resp.set_cookie("uid", uid, max_age=86400*365, httponly=True, samesite="lax")
+    return resp
 
 
 # ── 管理后台 ──────────────────────────────────────────
