@@ -318,11 +318,11 @@ h1 { font-size:24px; font-weight:700; margin-bottom:6px; }
   <div class="qr-section">
     <div class="qr-box">
       <div class="label wx">💚 微信支付</div>
-      <img src="/static/微信收款码.png" class="qr-img" alt="微信收款码">
+      <img src="/static/微信5元收款.png" class="qr-img" alt="微信收款 ¥5">
     </div>
     <div class="qr-box">
       <div class="label alipay">💙 支付宝</div>
-      <img src="/static/支付宝收款码.jpg" class="qr-img" alt="支付宝收款码">
+      <img src="/static/支付宝5元收款.jpg" class="qr-img" alt="支付宝收款 ¥5">
     </div>
   </div>
 
