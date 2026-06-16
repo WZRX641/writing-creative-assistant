@@ -40,6 +40,7 @@ def _init_db():
             user_id TEXT PRIMARY KEY,
             free_uses INTEGER DEFAULT 10,
             is_pro INTEGER DEFAULT 0,
+            nickname TEXT DEFAULT '',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
@@ -72,12 +73,18 @@ def _use_free(user_id: str) -> int:
     conn.close()
     return remaining
 
-def _set_pro(user_id: str):
+def _set_pro(user_id: str, nickname: str = ""):
     """将用户设为 Pro"""
     conn = sqlite3.connect(str(DB_PATH))
-    cur = conn.execute("UPDATE users SET is_pro = 1 WHERE user_id = ?", (user_id,))
-    if cur.rowcount == 0:
-        conn.execute("INSERT INTO users (user_id, is_pro) VALUES (?, 1)", (user_id,))
+    if nickname:
+        conn.execute(
+            "INSERT INTO users (user_id, is_pro, nickname) VALUES (?, 1, ?) "
+            "ON CONFLICT(user_id) DO UPDATE SET is_pro=1, nickname=excluded.nickname",
+            (user_id, nickname))
+    else:
+        cur = conn.execute("UPDATE users SET is_pro = 1 WHERE user_id = ?", (user_id,))
+        if cur.rowcount == 0:
+            conn.execute("INSERT INTO users (user_id, is_pro) VALUES (?, 1)", (user_id,))
     conn.commit()
     conn.close()
 
@@ -303,6 +310,39 @@ h1 { font-size:24px; font-weight:700; margin-bottom:6px; }
 }
 
 .contact { color: rgba(255,255,255,0.35); font-size:12px; margin-bottom:20px; }
+.btn-paid {
+  display:block; width:100%; padding:14px; border-radius:12px; border:none;
+  background: linear-gradient(135deg, #f59e0b, #ef4444); color:#fff;
+  font-size:16px; font-weight:600; cursor:pointer; margin-bottom:12px;
+  transition: all 0.2s;
+}
+.btn-paid:hover { box-shadow:0 6px 24px rgba(245,158,11,0.4); transform:translateY(-1px); }
+/* 弹窗 */
+.modal-overlay {
+  display:none; position:fixed; top:0; left:0; width:100%; height:100%;
+  background: rgba(0,0,0,0.7); z-index:100; align-items:center; justify-content:center;
+}
+.modal-overlay.show { display:flex; }
+.modal {
+  background: #1a1a2e; border:1px solid rgba(255,255,255,0.1); border-radius:16px;
+  padding:36px 30px; width:90%; max-width:380px; text-align:center;
+}
+.modal h2 { font-size:20px; margin-bottom:6px; }
+.modal .hint { color:rgba(255,255,255,0.35); font-size:13px; margin-bottom:20px; }
+.modal input {
+  width:100%; padding:12px 16px; border-radius:10px; border:1px solid rgba(255,255,255,0.1);
+  background: rgba(255,255,255,0.04); color:#e0e0f0; font-size:15px; outline:none;
+  margin-bottom:16px; text-align:center;
+}
+.modal input:focus { border-color: #7c3aed; }
+.modal .btn-submit {
+  width:100%; padding:12px; border-radius:10px; border:none;
+  background: linear-gradient(135deg, #34d399, #10b981); color:#111;
+  font-size:15px; font-weight:600; cursor:pointer;
+}
+.modal .btn-submit:hover { box-shadow:0 4px 16px rgba(52,211,153,0.3); }
+.modal .btn-submit:disabled { opacity:0.5; cursor:not-allowed; }
+.modal .close { margin-top:12px; color:rgba(255,255,255,0.25); font-size:12px; cursor:pointer; }
 .back { display:block; margin-top:12px; color: rgba(255,255,255,0.3); font-size:13px; text-decoration:none; }
 .back:hover { color: rgba(255,255,255,0.6); }
 </style>
@@ -329,23 +369,67 @@ h1 { font-size:24px; font-weight:700; margin-bottom:6px; }
   <div class="steps">
     <h3>📋 开通步骤</h3>
     <ol>
-      <li>扫码支付 ¥5</li>
-      <li>截图付款凭证</li>
-      <li>将下方 ID + 截图发给管理员</li>
-      <li>管理员手动开通 → 即时生效 ✅</li>
+      <li>选择上方微信或支付宝扫码支付 ¥5</li>
+      <li>支付完成后，点击下方「我已付款」按钮</li>
+      <li>填写你的昵称 → 系统自动开通 Pro ✅</li>
     </ol>
-    <span class="highlight">🆔 我的用户 ID：<b id="myUid">加载中...</b></span>
   </div>
 
-  <p class="contact">付款后请联系管理员，发送你的用户 ID 即可开通</p>
+  <button class="btn-paid" onclick="showRegister()">💰 我已付款，立即开通 Pro</button>
+  <p class="contact">支付遇到问题？联系管理员获取帮助</p>
 
   <a href="/" class="back">← 返回</a>
 </div>
 
+<!-- 注册弹窗 -->
+<div class="modal-overlay" id="modalOverlay">
+  <div class="modal">
+    <h2>🎉 开通 Pro 会员</h2>
+    <p class="hint">请输入你的创作昵称</p>
+    <input type="text" id="nicknameInput" placeholder="例如：江湖写手" maxlength="20">
+    <button class="btn-submit" id="btnSubmit" onclick="doRegister()">✅ 开通</button>
+    <div class="close" onclick="closeModal()">取消</div>
+  </div>
+</div>
+
 <script>
-// 读取用户 ID 并显示
+// 读取用户 ID
 const uid = document.cookie.split('; ').find(r => r.startsWith('uid='));
-document.getElementById('myUid').textContent = uid ? uid.split('=')[1].slice(0,16)+'…' : '未获取（请先进入主页）';
+if (!uid) { location.href = '/start'; }
+
+function showRegister() {
+  document.getElementById('modalOverlay').classList.add('show');
+}
+
+function closeModal() {
+  document.getElementById('modalOverlay').classList.remove('show');
+}
+
+async function doRegister() {
+  const nickname = document.getElementById('nicknameInput').value.trim();
+  if (!nickname) { alert('请输入昵称'); return; }
+  const btn = document.getElementById('btnSubmit');
+  btn.disabled = true; btn.textContent = '开通中…';
+  try {
+    const resp = await fetch('/api/register', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ nickname })
+    });
+    if (!resp.ok) {
+      const err = await resp.json().catch(()=>({detail:'未知错误'}));
+      alert('开通失败: '+err.detail); btn.disabled = false; btn.textContent = '✅ 开通';
+      return;
+    }
+    document.querySelector('.modal h2').textContent = '🎉 开通成功！';
+    document.querySelector('.modal .hint').textContent = nickname + '，你已是 Pro 会员';
+    document.querySelector('.modal input').style.display = 'none';
+    btn.textContent = '开始创作 →';
+    btn.onclick = () => { location.href = '/'; };
+  } catch(e) {
+    alert('网络错误，请重试');
+    btn.disabled = false; btn.textContent = '✅ 开通';
+  }
+}
 </script>
 </body>
 </html>"""
@@ -509,6 +593,23 @@ async def admin_users(key: str):
     if key != ADMIN_KEY:
         return JSONResponse({"ok": False, "error": "密钥错误"}, status_code=403)
     return JSONResponse({"ok": True, "users": _all_users()})
+
+
+# ── 用户自助注册 Pro（付款后） ──────────────────────
+
+class RegisterRequest(BaseModel):
+    nickname: str
+
+@app.post("/api/register")
+async def register_pro(req: RegisterRequest, request: Request):
+    uid = request.cookies.get("uid", "")
+    if not uid:
+        raise HTTPException(status_code=400, detail="请先访问首页")
+    nickname = req.nickname.strip()
+    if not nickname or len(nickname) > 20:
+        raise HTTPException(status_code=400, detail="昵称需1-20字")
+    _set_pro(uid, nickname)
+    return JSONResponse({"ok": True, "nickname": nickname})
 
 
 # ── API ───────────────────────────────────────────────
